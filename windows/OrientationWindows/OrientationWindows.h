@@ -2,24 +2,30 @@
 #include "pch.h"
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <NativeModules.h>
-
-using namespace winrt::Microsoft::ReactNative;
+#include <winrt/Windows.Graphics.Display.h>
+#include <winrt/Windows.UI.ViewManagement.h>
+#include <winrt/Windows.Devices.Sensors.h>
 
 namespace OrientationWindows {
 
     REACT_MODULE(OrientationLockerModule, L"OrientationLocker");
-    struct OrientationLockerModule
+    struct OrientationLockerModule : public std::enable_shared_from_this<OrientationLockerModule>
     {
         REACT_INIT(Initialize)
         void Initialize(React::ReactContext const& reactContext) noexcept;
+        winrt::Windows::Foundation::IAsyncAction InitOnUI();
+
+        REACT_CONSTANT_PROVIDER(GetConstants)
+        void GetConstants(React::ReactConstantProvider& provider) noexcept;
 
         REACT_METHOD(GetOrientation, L"getOrientation");
-        void GetOrientation(std::function<void(std::string)> cb) noexcept;
+        winrt::fire_and_forget GetOrientation(winrt::Microsoft::ReactNative::ReactPromise<std::string_view> promise) noexcept;
 
         REACT_METHOD(GetDeviceOrientation, L"getDeviceOrientation");
-        void GetDeviceOrientation(std::function<void(std::string)> cb) noexcept;
+        winrt::fire_and_forget GetDeviceOrientation(winrt::Microsoft::ReactNative::ReactPromise<std::string_view> promise) noexcept;
 
         REACT_METHOD(LockToPortrait, L"lockToPortrait");
         void LockToPortrait() noexcept;
@@ -40,43 +46,26 @@ namespace OrientationWindows {
         void UnlockAllOrientations() noexcept;
 
         REACT_EVENT(OrientationDidChange, L"orientationDidChange");
-        std::function<void(std::string)> OrientationDidChange;
+        std::function<void(std::string_view)> OrientationDidChange;
 
         REACT_EVENT(DeviceOrientationDidChange, L"deviceOrientationDidChange");
-        std::function<void(std::string)> DeviceOrientationDidChange;
+        std::function<void(std::string_view)> DeviceOrientationDidChange;
 
         REACT_EVENT(LockDidChange, L"lockDidChange");
-        std::function<void(std::string)> LockDidChange;
-
-        REACT_CONSTANT_PROVIDER(GetConstants)
-        void GetConstants(React::ReactConstantProvider& provider) noexcept;
+        std::function<void(std::string_view)> LockDidChange;
 
     private:
+        winrt::fire_and_forget LockToMode(winrt::Windows::Graphics::Display::DisplayOrientations targetOrientation, std::string_view eventName = "");
 
-        static std::string OrientationToString(winrt::Windows::Graphics::Display::DisplayOrientations orientations) noexcept;
-
-        static std::string DeviceOrientationToString(winrt::Windows::Devices::Sensors::SimpleOrientation orientation) noexcept;
-
-        void OnOrientationChanged(winrt::Windows::Graphics::Display::DisplayInformation const&, winrt::Windows::Foundation::IInspectable const&) noexcept;
-
-        void OnDeviceOrientationChanged(winrt::Windows::Devices::Sensors::SimpleOrientationSensor const&, winrt::Windows::Devices::Sensors::SimpleOrientationSensorOrientationChangedEventArgs const&) noexcept;
-
-        void InitConstants() noexcept;
-
-        std::string GetInitOrientation() noexcept;
-
+        winrt::Microsoft::ReactNative::ReactContext m_reactContext;
+                
+        winrt::Windows::Devices::Sensors::SimpleOrientationSensor m_deviceOrientationSensor{ nullptr };
         winrt::Windows::Graphics::Display::DisplayInformation m_displayInfo{ nullptr };
-
-        winrt::event_token m_orientationChangedToken{};
-
         winrt::Windows::UI::ViewManagement::UIViewSettings m_viewSettings{ nullptr };
 
-        winrt::Microsoft::ReactNative::ReactContext m_context;
+        std::string m_initialOrientation{ "UNKNOWN" };
 
-        std::string m_initialOrientation;
-
-        winrt::Windows::Devices::Sensors::SimpleOrientationSensor m_deviceOrientationSensor{ nullptr };
-
-        winrt::event_token m_deviceOrientationChangedToken{};
+        winrt::Windows::Devices::Sensors::SimpleOrientationSensor::OrientationChanged_revoker m_deviceOrientationChangedRevoker{};
+        winrt::Windows::Graphics::Display::DisplayInformation::OrientationChanged_revoker m_orientationChangedRevoker{};
     };
 }

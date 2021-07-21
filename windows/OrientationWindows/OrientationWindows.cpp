@@ -5,199 +5,181 @@ using namespace winrt::Windows::Graphics::Display;
 using namespace winrt::Windows::UI::ViewManagement;
 using namespace winrt::Windows::Devices::Sensors;
 
+namespace winrt
+{
+    /// <summary>
+    /// Moves execution onto a ReactDispatcher's thread
+    /// </summary>
+    /// <param name="dispatcher">The dispatcher to resume execution on</param>
+    /// <param name="tryImmediate">
+    /// When true, if we're already execution on the dispatcher's thread it will continue execution immediately instead
+    /// of scheduling onto the queue. When false, execution is always scheduled onto the back of the queue.
+    /// </param>
+    /// <returns></returns>
+    [[nodiscard]] inline auto resume_foreground(
+        winrt::Microsoft::ReactNative::ReactDispatcher const& dispatcher,
+        bool tryImmediate)
+    {
+        struct awaitable
+        {
+            awaitable(winrt::Microsoft::ReactNative::ReactDispatcher const& dispatcher, bool tryImmediate) noexcept
+                : m_dispatcher(dispatcher),
+                m_tryImmediate(tryImmediate)
+            {
+            }
+
+            bool await_ready() const noexcept
+            {
+                return m_tryImmediate ? m_dispatcher.HasThreadAccess() : false;
+            }
+
+            void await_resume() const noexcept
+            {
+            }
+
+            void await_suspend(std::experimental::coroutine_handle<> handle) const
+            {
+                m_dispatcher.Post(
+                    [handle]
+                {
+                    handle();
+                });
+            }
+
+        private:
+            winrt::Microsoft::ReactNative::ReactDispatcher const& m_dispatcher;
+            bool m_tryImmediate;
+        };
+
+        return awaitable {dispatcher, tryImmediate};
+    }
+} // namespace winrt
+
 namespace OrientationWindows {
 
+    constexpr std::string_view OrientationToString(DisplayOrientations orientation) noexcept {
+        switch (orientation) {
+        case DisplayOrientations::Landscape:
+            return "LANDSCAPE";
+        case DisplayOrientations::Portrait:
+            return "PORTRAIT";
+        case DisplayOrientations::LandscapeFlipped:
+            return "LANDSCAPE-RIGHT";
+        case DisplayOrientations::PortraitFlipped:
+            return "PORTRAIT-UPSIDEDOWN";
+        }
+        return "";
+    }
+
+    constexpr std::string_view DeviceOrientationToString(SimpleOrientation orientation) noexcept {
+        switch (orientation) {
+        case SimpleOrientation::Facedown:
+            return "FACE-DOWN";
+        case SimpleOrientation::Faceup:
+            return "FACE-UP";
+        case SimpleOrientation::NotRotated:
+            return "LANDSCAPE";
+        case SimpleOrientation::Rotated90DegreesCounterclockwise:
+            return "PORTRAIT-UPSIDEDOWN";
+        case SimpleOrientation::Rotated180DegreesCounterclockwise:
+            return "LANDSCAPE-RIGHT";
+        case SimpleOrientation::Rotated270DegreesCounterclockwise:
+            return "PORTRAIT";
+        }
+        return "";
+    }
+
     void OrientationLockerModule::Initialize(React::ReactContext const& reactContext) noexcept {
-        m_context = reactContext;
+        m_reactContext = reactContext;
+
+        InitOnUI().get();
+    }
+
+    winrt::IAsyncAction OrientationLockerModule::InitOnUI() {
+        auto strong_this = shared_from_this();
+
+        co_await winrt::resume_foreground(m_reactContext.UIDispatcher(), true);
+
         m_deviceOrientationSensor = SimpleOrientationSensor::GetDefault();
         if (m_deviceOrientationSensor != nullptr)
         {
-            m_deviceOrientationChangedToken = m_deviceOrientationSensor.OrientationChanged({ this, &OrientationLockerModule::OnDeviceOrientationChanged });
+            m_deviceOrientationChangedRevoker = m_deviceOrientationSensor.OrientationChanged(winrt::auto_revoke, [callback = DeviceOrientationDidChange](SimpleOrientationSensor const& sensor, SimpleOrientationSensorOrientationChangedEventArgs const&) {
+                callback(DeviceOrientationToString(sensor.GetCurrentOrientation()));
+            });
         }
+
+        m_viewSettings = UIViewSettings::GetForCurrentView();
+        m_displayInfo = DisplayInformation::GetForCurrentView();
+        m_initialOrientation = OrientationToString(m_displayInfo.CurrentOrientation());
+        m_orientationChangedRevoker = m_displayInfo.OrientationChanged(winrt::auto_revoke, [callback = OrientationDidChange](DisplayInformation const& displayInfo, winrt::Windows::Foundation::IInspectable const&) {
+            callback(OrientationToString(displayInfo.CurrentOrientation()));
+        });
     }
 
-    void OrientationLockerModule::GetOrientation(std::function<void(std::string)> cb) noexcept {
-        const auto currentOrientation = m_displayInfo.CurrentOrientation();
-        cb(OrientationToString(currentOrientation));
+    void OrientationLockerModule::GetConstants(React::ReactConstantProvider& provider) noexcept {
+        provider.Add(L"initialOrientation", m_initialOrientation);
     }
 
-    void OrientationLockerModule::GetDeviceOrientation(std::function<void(std::string)> cb) noexcept {
+    winrt::fire_and_forget OrientationLockerModule::GetOrientation(winrt::Microsoft::ReactNative::ReactPromise<std::string_view> promise) noexcept {
+        auto displayInfo = m_displayInfo;
+
+        co_await winrt::resume_foreground(m_reactContext.UIDispatcher(), true);
+
+        promise.Resolve(OrientationToString(displayInfo.CurrentOrientation()));
+    }
+
+    winrt::fire_and_forget OrientationLockerModule::GetDeviceOrientation(winrt::Microsoft::ReactNative::ReactPromise<std::string_view> promise) noexcept {
         if (m_deviceOrientationSensor != nullptr)
         {
-           const auto currentDeviceOrientation = m_deviceOrientationSensor.GetCurrentOrientation();
-            cb(DeviceOrientationToString(currentDeviceOrientation));
+            auto sensor = m_deviceOrientationSensor;
+
+            co_await winrt::resume_foreground(m_reactContext.UIDispatcher(), true);
+
+            promise.Resolve(DeviceOrientationToString(sensor.GetCurrentOrientation()));
         }
         else {
             // No Orientation Sensor found on device
-            cb("UNKNOWN");
+            promise.Resolve("UNKNOWN");
+        }
+    }
+
+    winrt::fire_and_forget OrientationLockerModule::LockToMode(DisplayOrientations targetOrientation, std::string_view eventName) {
+        auto viewSettings = m_viewSettings;
+        auto displayInfo = m_displayInfo;
+        auto callback = LockDidChange;
+
+        co_await winrt::resume_foreground(m_reactContext.UIDispatcher(), true);
+
+        const auto mode = viewSettings.UserInteractionMode();
+        if (mode == UserInteractionMode::Touch) {
+            if (displayInfo.AutoRotationPreferences() != targetOrientation) {
+                DisplayInformation::AutoRotationPreferences(targetOrientation);
+                callback(eventName.size() > 0 ? eventName : OrientationToString(targetOrientation));
+            }
         }
     }
 
     void OrientationLockerModule::LockToPortrait() noexcept {
-        const auto mode = m_viewSettings.UserInteractionMode();
-        if (mode == UserInteractionMode::Touch) {
-            if (m_displayInfo.AutoRotationPreferences() != DisplayOrientations::Portrait) {
-                DisplayInformation::AutoRotationPreferences(DisplayOrientations::Portrait);
-                LockDidChange("PORTRAIT");
-            }
-        }
+        LockToMode(DisplayOrientations::Portrait);
     }
 
     void OrientationLockerModule::LockToPortraitUpsideDown() noexcept {
-        const auto mode = m_viewSettings.UserInteractionMode();
-        if (mode == UserInteractionMode::Touch) {
-            if (m_displayInfo.AutoRotationPreferences() != DisplayOrientations::PortraitFlipped) {
-                DisplayInformation::AutoRotationPreferences(DisplayOrientations::PortraitFlipped);
-                LockDidChange("PORTRAIT-UPSIDEDOWN");
-            }
-        }
+        LockToMode(DisplayOrientations::PortraitFlipped);
     }
 
     void OrientationLockerModule::LockToLandscape() noexcept {
-        const auto mode = m_viewSettings.UserInteractionMode();
-        if (mode == UserInteractionMode::Touch) {
-            if (m_displayInfo.AutoRotationPreferences() != DisplayOrientations::Landscape) {
-                DisplayInformation::AutoRotationPreferences(DisplayOrientations::Landscape);
-                LockDidChange("LANDSCAPE");
-            }
-        }
+        LockToMode(DisplayOrientations::Landscape);
     }
 
     void OrientationLockerModule::LockToLandscapeRight() noexcept {
-        const auto mode = m_viewSettings.UserInteractionMode();
-        if (mode == UserInteractionMode::Touch) {
-            if (m_displayInfo.AutoRotationPreferences() != DisplayOrientations::LandscapeFlipped) {
-                DisplayInformation::AutoRotationPreferences(DisplayOrientations::LandscapeFlipped);
-                LockDidChange("LANDSCAPE-RIGHT");
-            }
-        }
+        LockToMode(DisplayOrientations::LandscapeFlipped);
     }
 
     void OrientationLockerModule::LockToLandscapeLeft() noexcept {
-        const auto mode = m_viewSettings.UserInteractionMode();
-        if (mode == UserInteractionMode::Touch) {
-            if (m_displayInfo.AutoRotationPreferences() != DisplayOrientations::Landscape) {
-                DisplayInformation::AutoRotationPreferences(DisplayOrientations::Landscape);
-                LockDidChange("LANDSCAPE-LEFT");
-            }
-        }
+        LockToMode(DisplayOrientations::Landscape, "LANDSCAPE-LEFT");
     }
 
     void OrientationLockerModule::UnlockAllOrientations() noexcept {
-        const auto mode = m_viewSettings.UserInteractionMode();
-        if (mode == UserInteractionMode::Touch) {
-            DisplayOrientations allOrientations = DisplayOrientations::Landscape | DisplayOrientations::LandscapeFlipped | DisplayOrientations::Portrait | DisplayOrientations::PortraitFlipped;
-            if (m_displayInfo.AutoRotationPreferences() != allOrientations) {
-                DisplayInformation::AutoRotationPreferences(allOrientations);
-                GetOrientation(LockDidChange);
-            }
-        }
-    }
-
-    void OrientationLockerModule::GetConstants(React::ReactConstantProvider& provider) noexcept {
-        if (!m_context.UIDispatcher().HasThreadAccess()) {
-            const auto ghSetConstantsEvent = CreateEvent(
-                nullptr,                       // default security attributes
-                TRUE,                       // manual-reset event
-                FALSE,                      // initial state is nonsignaled
-                L"OrientationLockerModule_SetConstantsEvent"   // object name
-            );
-            if (ghSetConstantsEvent == nullptr)
-            {
-                assert(false);
-            }
-            m_context.UIDispatcher().Post([&provider, ghSetConstantsEvent, this]() {
-                InitConstants();
-                provider.Add(L"initialOrientation", GetInitOrientation());
-                if (!SetEvent(ghSetConstantsEvent))
-                {
-                    assert(false);
-                }
-                });
-            const auto dwWaitResult = WaitForSingleObject(
-                ghSetConstantsEvent,
-                INFINITE);                  // wait period
-            switch (dwWaitResult)
-            {
-            case WAIT_OBJECT_0:
-                break;
-            default:
-                assert(false);
-            }
-            CloseHandle(ghSetConstantsEvent);
-        }
-        else {
-            InitConstants();
-            provider.Add(L"initialOrientation", GetInitOrientation());
-        }
-    }
-
-    std::string OrientationLockerModule::OrientationToString(DisplayOrientations orientation) noexcept {
-        std::string result;
-        if (orientation == DisplayOrientations::Landscape)
-        {
-            result = "LANDSCAPE";
-        }
-        else if (orientation == DisplayOrientations::Portrait)
-        {
-            result = "PORTRAIT";
-        }
-        else if (orientation == DisplayOrientations::LandscapeFlipped)
-        {
-            result = "LANDSCAPE-RIGHT";
-        }
-        else if (orientation == DisplayOrientations::PortraitFlipped)
-        {
-            result = "PORTRAIT-UPSIDEDOWN";
-        }
-        return result;
-    }
-
-    std::string OrientationLockerModule::DeviceOrientationToString(SimpleOrientation orientation) noexcept {
-        std::string result;
-        if (orientation == SimpleOrientation::Facedown)
-        {
-            result = "FACE-DOWN";
-        }
-        else if (orientation == SimpleOrientation::Faceup)
-        {
-            result = "FACE-UP";
-        }
-        else if (orientation == SimpleOrientation::NotRotated)
-        {
-            result = "LANDSCAPE";
-        }
-        else if (orientation == SimpleOrientation::Rotated90DegreesCounterclockwise)
-        {
-            result = "PORTRAIT-UPSIDEDOWN";
-        }
-        else if (orientation == SimpleOrientation::Rotated180DegreesCounterclockwise)
-        {
-            result = "LANDSCAPE-RIGHT";
-        }
-        else if (orientation == SimpleOrientation::Rotated270DegreesCounterclockwise)
-        {
-            result = "PORTRAIT";
-        }
-        return result;
-    }
-
-    void OrientationLockerModule::OnOrientationChanged(DisplayInformation const&, winrt::Windows::Foundation::IInspectable const&) noexcept {
-        GetOrientation(OrientationDidChange);
-    }
-
-    void OrientationLockerModule::OnDeviceOrientationChanged(SimpleOrientationSensor const&, SimpleOrientationSensorOrientationChangedEventArgs const&) noexcept {
-        GetDeviceOrientation(DeviceOrientationDidChange);
-    }
-
-    void OrientationLockerModule::InitConstants() noexcept {
-        m_displayInfo = DisplayInformation::GetForCurrentView();
-        m_viewSettings = UIViewSettings::GetForCurrentView();
-        m_initialOrientation = OrientationToString(m_displayInfo.CurrentOrientation());
-        m_orientationChangedToken = m_displayInfo.OrientationChanged({ this, &OrientationLockerModule::OnOrientationChanged });
-    }
-
-    std::string OrientationLockerModule::GetInitOrientation() noexcept {
-        return m_initialOrientation;
+        LockToMode(DisplayOrientations::Landscape | DisplayOrientations::LandscapeFlipped | DisplayOrientations::Portrait | DisplayOrientations::PortraitFlipped, "UNLOCK");
     }
 }
