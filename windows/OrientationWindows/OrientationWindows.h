@@ -58,10 +58,10 @@ namespace OrientationWindows {
         winrt::fire_and_forget LockToMode(winrt::Windows::Graphics::Display::DisplayOrientations targetOrientation, std::string_view eventName = "");
 
         winrt::Microsoft::ReactNative::ReactContext m_reactContext;
+        winrt::Windows::Foundation::IAsyncAction m_initializer;
                 
         winrt::Windows::Devices::Sensors::SimpleOrientationSensor m_deviceOrientationSensor{ nullptr };
         winrt::Windows::Graphics::Display::DisplayInformation m_displayInfo{ nullptr };
-        winrt::Windows::UI::ViewManagement::UIViewSettings m_viewSettings{ nullptr };
 
         std::string m_initialOrientation{ "UNKNOWN" };
 

@@ -29,13 +29,13 @@
     "dependencies": {
     },
     "peerDependencies": {
-        "react": "16.13.1",
-        "react-native": "0.63.2",
-        "react-native-windows": "^0.63.3"
+        "react": "^17.0.0",
+        "react-native": "^0.66.0",
+        "react-native-windows": "^0.66.0"
     },
     "devDependencies": {
-        "react": "16.13.1",
-        "react-native": "0.63.2",
-        "react-native-windows": "^0.63.3"
+        "react": "^17.0.0",
+        "react-native": "^0.66.0",
+        "react-native-windows": "^0.66.0"
     }
 }

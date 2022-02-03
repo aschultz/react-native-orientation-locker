@@ -2,8 +2,8 @@
 
 #include "App.h"
 
-#include "AutolinkedNativeModules.g.h"
 #include "ReactPackageProvider.h"
+#include <winrt/OrientationWindows.h>
 
 
 using namespace winrt::example;
@@ -26,7 +26,7 @@ App::App() noexcept
     InstanceSettings().UseWebDebugger(false);
     InstanceSettings().UseFastRefresh(false);
 #else
-    JavaScriptMainModuleName(L"index");
+    JavaScriptBundleFile(L"index");
     InstanceSettings().UseWebDebugger(true);
     InstanceSettings().UseFastRefresh(true);
 #endif
@@ -36,8 +36,6 @@ App::App() noexcept
 #else
     InstanceSettings().UseDeveloperSupport(false);
 #endif
-
-    RegisterAutolinkedNativeModulePackages(PackageProviders()); // Includes any autolinked modules
 
     PackageProviders().Append(make<ReactPackageProvider>()); // Includes all modules in this project
     PackageProviders().Append(winrt::OrientationWindows::ReactPackageProvider());

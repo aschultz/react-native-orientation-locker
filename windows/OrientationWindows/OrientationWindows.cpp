@@ -47,7 +47,7 @@ namespace winrt
             }
 
         private:
-            winrt::Microsoft::ReactNative::ReactDispatcher const& m_dispatcher;
+            winrt::Microsoft::ReactNative::ReactDispatcher m_dispatcher;
             bool m_tryImmediate;
         };
 
@@ -92,10 +92,12 @@ namespace OrientationWindows {
     void OrientationLockerModule::Initialize(React::ReactContext const& reactContext) noexcept {
         m_reactContext = reactContext;
 
-        InitOnUI().get();
+        // We need to be on the UI thread to access Sensor data
+        m_initializer = InitOnUI();
     }
 
     winrt::IAsyncAction OrientationLockerModule::InitOnUI() {
+        // Keep 'this' alive through entirety of async operation
         auto strong_this = shared_from_this();
 
         co_await winrt::resume_foreground(m_reactContext.UIDispatcher(), true);
@@ -103,36 +105,40 @@ namespace OrientationWindows {
         m_deviceOrientationSensor = SimpleOrientationSensor::GetDefault();
         if (m_deviceOrientationSensor != nullptr)
         {
-            m_deviceOrientationChangedRevoker = m_deviceOrientationSensor.OrientationChanged(winrt::auto_revoke, [callback = DeviceOrientationDidChange](SimpleOrientationSensor const& sensor, SimpleOrientationSensorOrientationChangedEventArgs const&) {
-                callback(DeviceOrientationToString(sensor.GetCurrentOrientation()));
+            m_deviceOrientationChangedRevoker = m_deviceOrientationSensor.OrientationChanged(winrt::auto_revoke, [fireEvent = DeviceOrientationDidChange](SimpleOrientationSensor const& sensor, SimpleOrientationSensorOrientationChangedEventArgs const&) {
+                fireEvent(DeviceOrientationToString(sensor.GetCurrentOrientation()));
             });
         }
 
-        m_viewSettings = UIViewSettings::GetForCurrentView();
         m_displayInfo = DisplayInformation::GetForCurrentView();
         m_initialOrientation = OrientationToString(m_displayInfo.CurrentOrientation());
-        m_orientationChangedRevoker = m_displayInfo.OrientationChanged(winrt::auto_revoke, [callback = OrientationDidChange](DisplayInformation const& displayInfo, winrt::Windows::Foundation::IInspectable const&) {
-            callback(OrientationToString(displayInfo.CurrentOrientation()));
+        m_orientationChangedRevoker = m_displayInfo.OrientationChanged(winrt::auto_revoke, [fireEvent = OrientationDidChange](DisplayInformation const& displayInfo, winrt::Windows::Foundation::IInspectable const&) {
+            fireEvent(OrientationToString(displayInfo.CurrentOrientation()));
         });
     }
 
     void OrientationLockerModule::GetConstants(React::ReactConstantProvider& provider) noexcept {
+        // Block until initializer completes
+        if (m_initializer) {
+            m_initializer.get();
+            m_initializer = nullptr;
+        }
+
         provider.Add(L"initialOrientation", m_initialOrientation);
     }
 
     winrt::fire_and_forget OrientationLockerModule::GetOrientation(winrt::Microsoft::ReactNative::ReactPromise<std::string_view> promise) noexcept {
-        auto displayInfo = m_displayInfo;
-
         co_await winrt::resume_foreground(m_reactContext.UIDispatcher(), true);
+
+        auto displayInfo = DisplayInformation::GetForCurrentView();
 
         promise.Resolve(OrientationToString(displayInfo.CurrentOrientation()));
     }
 
     winrt::fire_and_forget OrientationLockerModule::GetDeviceOrientation(winrt::Microsoft::ReactNative::ReactPromise<std::string_view> promise) noexcept {
-        if (m_deviceOrientationSensor != nullptr)
+        auto sensor = m_deviceOrientationSensor;
+        if (sensor)
         {
-            auto sensor = m_deviceOrientationSensor;
-
             co_await winrt::resume_foreground(m_reactContext.UIDispatcher(), true);
 
             promise.Resolve(DeviceOrientationToString(sensor.GetCurrentOrientation()));
@@ -144,17 +150,19 @@ namespace OrientationWindows {
     }
 
     winrt::fire_and_forget OrientationLockerModule::LockToMode(DisplayOrientations targetOrientation, std::string_view eventName) {
-        auto viewSettings = m_viewSettings;
-        auto displayInfo = m_displayInfo;
-        auto callback = LockDidChange;
+
+        auto fireEvent = LockDidChange;
 
         co_await winrt::resume_foreground(m_reactContext.UIDispatcher(), true);
+
+        auto viewSettings = UIViewSettings::GetForCurrentView();
+        auto displayInfo = DisplayInformation::GetForCurrentView();
 
         const auto mode = viewSettings.UserInteractionMode();
         if (mode == UserInteractionMode::Touch) {
             if (displayInfo.AutoRotationPreferences() != targetOrientation) {
                 DisplayInformation::AutoRotationPreferences(targetOrientation);
-                callback(eventName.size() > 0 ? eventName : OrientationToString(targetOrientation));
+                fireEvent(eventName.size() > 0 ? eventName : OrientationToString(targetOrientation));
             }
         }
     }

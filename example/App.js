@@ -8,10 +8,8 @@
  * https://github.com/facebook/react-native
  */
 
-import React, {Component, useEffect, useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import {
-  Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -28,7 +26,6 @@ export default function App() {
   const [isLocked, setLocked] = useState();
   const [orientation, setOrientation] = useState();
   const [deviceOrientation, setDeviceOrientation] = useState();
-  const [lock, setLock] = useState();
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {

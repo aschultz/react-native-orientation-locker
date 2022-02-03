@@ -4,38 +4,40 @@
  *
  * @format
  */
-const fs = require('fs');
 const path = require('path');
-const blacklist = require('metro-config/src/defaults/blacklist');
+const exclusionList = require('metro-config/src/defaults/exclusionList');
 
-const rnPath = fs.realpathSync(
-  path.resolve(require.resolve('react-native/package.json'), '..'),
+const rnwPath = path.resolve(
+  require.resolve('react-native-windows/package.json'),
+  '..',
 );
-const rnwPath = fs.realpathSync(
-  path.resolve(require.resolve('react-native-windows/package.json'), '..'),
-);
+const libPath = path.resolve(__dirname, '..');
 
 module.exports = {
+  projectRoot: __dirname,
+  watchFolders: [libPath],
   resolver: {
-    extraNodeModules: {
-      // Redirect react-native to react-native-windows
-      'react-native': rnwPath,
-      'react-native-windows': rnwPath,
-    },
+    // Metro can't handle symlinks, so provide the real path to find our lib.
+    // For all other modules, just look in node_modules
+    extraNodeModules: new Proxy(
+      {
+        'react-native-orientation-locker': libPath,
+      },
+      {
+        get: (target, name) =>
+          target[name] ?? path.resolve(__dirname, 'node_modules', name),
+      },
+    ),
     // Include the macos platform in addition to the defaults because the fork includes macos, but doesn't declare it
     platforms: ['ios', 'android', 'windesktop', 'windows', 'web', 'macos'],
-    // Since there are multiple copies of react-native, we need to ensure that metro only sees one of them
-    // This should go in RN 0.61 when haste is removed
-    blacklistRE: blacklist([
-      new RegExp(
-        `${(path.resolve(rnPath) + path.sep).replace(/[/\\]/g, '/')}.*`,
-      ),
-
+    blockList: exclusionList([
       // This stops "react-native run-windows" from causing the metro server to crash if its already running
       new RegExp(
         `${path.resolve(__dirname, 'windows').replace(/[/\\]/g, '/')}.*`,
       ),
-      // Avoid error EBUSY: resource busy or locked, open '...\vnext\msbuild.ProjectImports.zip' when building 'vnext\Microsoft.ReactNative.sln' with '/bl'
+      // This prevents "react-native run-windows" from hitting: EBUSY: resource busy or locked, open msbuild.ProjectImports.zip or other files produced by msbuild
+      new RegExp(`${rnwPath}/build/.*`),
+      new RegExp(`${rnwPath}/target/.*`),
       /.*\.ProjectImports\.zip/,
     ]),
   },
@@ -43,7 +45,7 @@ module.exports = {
     getTransformOptions: async () => ({
       transform: {
         experimentalImportSupport: false,
-        inlineRequires: false,
+        inlineRequires: true,
       },
     }),
   },
